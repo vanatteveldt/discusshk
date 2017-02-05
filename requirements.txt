@@ -1,0 +1,4 @@
+amcatclient
+requests
+lxml
+cssselect

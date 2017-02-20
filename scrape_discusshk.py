@@ -12,9 +12,9 @@ from lxml.html import HtmlElement
 class URL:
     page = "http://news.discuss.com.hk/viewthread.php?tid={tid}&extra=&page={pagenr}"
     forum = "http://news.discuss.com.hk/forumdisplay.php?fid={fid}&page={pagenr}"
+    fora = "http://news.discuss.com.hk/index.php?gid={gid}"
 
-NOTICE_DELETED = "作者被禁止或刪除 內容自動屏蔽"
-
+NOTICE_DELETED = {"作者被禁止或刪除 內容自動屏蔽", "提示: 作者被禁止或刪除 內容自動屏蔽", "提示: 該帖被管理員或版主屏蔽"}
 def get_html(url) -> HtmlElement:
     """Request html and return as lxml HtmlElement"""
     logging.info(url)
@@ -64,7 +64,7 @@ def scrape_post(url, pagenr, title, post):
         return
 
     notice = post.cssselect("div.notice")
-    if notice and NOTICE_DELETED in notice[0].text_content():
+    if notice and any(n in notice[0].text_content() for n in NOTICE_DELETED):
         return
     elif notice:
         print(notice[0].text_content())
@@ -79,6 +79,14 @@ def scrape_post(url, pagenr, title, post):
     info, = post.cssselect(".postinfo")
     datestr = re_search("發表於\s*(\d+-\d+-\d+\s+\d+:\d+\s+(?:AM|PM))", info.text_content())
     date = datetime.datetime.strptime(datestr.group(1), "%Y-%m-%d %I:%M %p")
+
+
+    likes = post.cssselect(".like-number")[0].text_content()
+    likes = 0 if likes in ("GG", "推") else int(likes)
+    dislikes = post.cssselect(".dislike-number")[0].text_content()
+    dislikes = 0 if dislikes in ("GG", "推") else int(dislikes)
+
+
 
     quote = []
     body = post.cssselect(".t_msgfont span")[0]
@@ -100,10 +108,18 @@ def scrape_post(url, pagenr, title, post):
     content = " ".join(c for c in content if c)
     if not content: content = "-"
 
-    extra = {"author_uid": author_uid}
+    extra = {"author_uid": author_uid, "likes": likes, "dislikes": dislikes}
     quote = " ".join(c for c in quote if c)
     if quote:
         extra["quote"] = quote
+
+    profilefields = {"帖子": "posts", "金幣": "gold", "註冊時間": "joindate", "積分": "score"}
+    profilekeys = post.cssselect("dl.profile dt")
+    profilevalues = post.cssselect("dl.profile dd")
+    for k,v in zip(profilekeys, profilevalues):
+        k = profilefields[k.text_content()]
+        v = v.text_content().strip()
+        extra[k] = v
 
     return {"date": date,
            "headline": headline,
@@ -123,15 +139,29 @@ def get_threads(fid):
         if not page.cssselect(".pages .next"):
             break
 
+def get_fora(gid):
+    url = URL.fora.format(**locals())
+    page = get_html(url)
+    for a in page.cssselect(".forumdesc h2 a"):
+        fid = int(re_search("\?fid=(\d+)", a.get("href")).group(1))
+        yield fid, a.text_content()
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
                         format='[%(asctime)s %(name)-12s %(levelname)-5s] %(message)s')
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("amcatclient").setLevel(logging.INFO)
+
     from amcatclient import AmcatAPI
     a = AmcatAPI("https://amcat.nl")
-
-    fname = "金融財經討論區 > 時事新聞討論區"
-    fid = 1175 # news
-    for thread in get_threads(fid):
-        articles = list(scrape_thread(fname, thread))
-        a.create_articles(1325, 33521, json_data = articles)
+    gid, gname = 150, "時事新聞討論區"
+    go = False
+    for fid, fname in get_fora(gid):
+        fname = " > ".join([gname, fname])
+        logging.info("Scraping forum {fid}:{fname}".format(**locals()))
+        for thread in get_threads(fid):
+            if go or thread == 26446822:
+                go = True
+                articles = list(scrape_thread(fname, thread))
+                logging.info("Adding {} articles from thread {thread}".format(len(articles), **locals()))
+                a.create_articles(1325, 33743, json_data = articles)

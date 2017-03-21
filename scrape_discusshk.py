@@ -6,7 +6,7 @@ import re
 
 import requests
 from lxml import html
-from lxml.html import HtmlElement
+from lxml.html import HtmlElement, HtmlComment
 
 
 class URL:
@@ -92,6 +92,8 @@ def scrape_post(url, pagenr, title, post):
     body = post.cssselect(".t_msgfont span")[0]
     content = [body.text]
     for e in body:
+        if isinstance(e, HtmlComment):
+            continue
         content.append(e.text)
         if e.tag == "div" and e.get('class') == "quote":
             quote.append(e.text_content())
@@ -132,6 +134,7 @@ def scrape_post(url, pagenr, title, post):
 
 def get_threads(fid):
     for pagenr in count(1):
+        if SKIP and pagenr < PAGE: continue
         url = URL.forum.format(**locals())
         page = get_html(url)
         for a in page.cssselect(".tsubject a"):
@@ -144,7 +147,11 @@ def get_fora(gid):
     page = get_html(url)
     for a in page.cssselect(".forumdesc h2 a"):
         fid = int(re_search("\?fid=(\d+)", a.get("href")).group(1))
+        if SKIP and fid != FORUM: continue
         yield fid, a.text_content()
+
+SKIP=False
+SKIP, FORUM, PAGE, THREAD = True, 1136, 48, 26035379
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG,
@@ -155,13 +162,12 @@ if __name__ == '__main__':
     from amcatclient import AmcatAPI
     a = AmcatAPI("https://amcat.nl")
     gid, gname = 150, "時事新聞討論區"
-    go = False
     for fid, fname in get_fora(gid):
         fname = " > ".join([gname, fname])
         logging.info("Scraping forum {fid}:{fname}".format(**locals()))
         for thread in get_threads(fid):
-            if go or thread == 26446822:
-                go = True
-                articles = list(scrape_thread(fname, thread))
-                logging.info("Adding {} articles from thread {thread}".format(len(articles), **locals()))
-                a.create_articles(1325, 33743, json_data = articles)
+            if SKIP and thread != THREAD: continue
+            SKIP=False
+            articles = list(scrape_thread(fname, thread))
+            logging.info("Adding {} articles from thread {thread}".format(len(articles), **locals()))
+            a.create_articles(1325, 33743, json_data = articles)
